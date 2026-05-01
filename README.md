@@ -26,7 +26,7 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
   end,
   keys = {
     { "<leader>t", ":Tau<CR>", mode = "v", desc = "Tau: edit selection" },
-    { "<leader>T", ":Tau ", mode = "v", desc = "Tau: edit selection with prompt" },
+    { "<C-t>", ":TauContext<CR>", mode = "n", desc = "Tau: context files" },
   },
 }
 ```
