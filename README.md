@@ -1,14 +1,14 @@
 # tau.nvim
 
-The simplest way to do inline code edits with an LLM in Neovim.
+A minimal Neovim plugin for applying LLM edits to a visual selection or range.
 
-## Requirements
+Tau sends your instruction, selected code, nearby context, and optional context files to an OpenAI-compatible `/chat/completions` API, then streams the proposed edit back into Neovim for review.
 
-- Neovim 0.10+
-- [Bun](https://bun.sh)
-- An OpenAI-compatible API endpoint
+<img width="4735" height="1298" alt="image" src="https://github.com/user-attachments/assets/e9473473-cc7c-40ea-8e6b-21b9905dff1b" />
 
-## Installation
+## Install
+
+Requirements: Neovim 0.10+, [Bun](https://bun.sh), and an OpenAI-compatible API endpoint.
 
 Using [lazy.nvim](https://github.com/folke/lazy.nvim):
 
@@ -16,45 +16,22 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
 {
   "timothyckl/tau.nvim",
   lazy = false,
-  build = "cd cli && bun build --compile src/index.ts --outfile tau",
+  build = "cd cli && bun run build",
   config = function()
     require("tau").setup({
-      api_url = "http://localhost:1234/v1",
-      api_key = "your-api-key",
-      model = "your-model-name",
+      api_url = "https://api.openai.com/v1", -- Tau appends /chat/completions
+      api_key = vim.env.OPENAI_API_KEY,
+      model = "gpt-4o",
     })
   end,
   keys = {
-    { "<leader>t", ":Tau<CR>", mode = "v", desc = "Tau: LLM edit selection" },
+    { "<leader>t", ":Tau<CR>", mode = "v", desc = "Tau: edit selection" },
+    { "<leader>T", ":Tau ", mode = "v", desc = "Tau: edit selection with prompt" },
   },
 }
 ```
 
-> The `build` step compiles the CLI binary automatically on install and update.
-
-## Setup
-
-`require("tau").setup()` accepts the following options:
-
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `api_url` | string | yes | Base URL of your OpenAI-compatible API |
-| `api_key` | string | yes | API key |
-| `model` | string | no | Model name (default: `gpt-4o`) |
-| `debug` | boolean | no | Enable diagnostic logging to `~/.local/state/tau/diag.log` |
-| `timeout_ms` | number | no | Request timeout in milliseconds (default: `60000`) |
-| `context_lines` | number | no | Number of lines above/below selection sent as context (default: `30`) |
-
-## Usage
-
-1. Visually select code in Neovim
-2. Run `:Tau <instruction>` or press your keymap (e.g. `<leader>t`)
-3. Type your instruction (e.g. "add error handling", "convert to async")
-4. The selection is replaced with the LLM's output
-
-## Provider examples
-
-### Ollama
+For Ollama-compatible local servers:
 
 ```lua
 require("tau").setup({
@@ -64,15 +41,70 @@ require("tau").setup({
 })
 ```
 
-### OpenAI
+## Usage
+
+Select code in visual mode, then run:
+
+```vim
+:Tau rewrite this to be simpler
+```
+
+Or run `:Tau` without an instruction to open the instruction picker. While reviewing a streamed proposal:
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | Accept edit |
+| `<Esc>` | Reject edit |
+| `r` | Regenerate edit |
+
+Tau automatically includes nearby lines from the active file. To add more files as context, press `<C-t>` in the instruction picker or run `:TauContext`.
+
+In the context picker:
+
+| Key / Symbol | Meaning |
+| --- | --- |
+| `<Space>` | Toggle file under cursor |
+| `<Esc>` / `q` | Close picker |
+| `◎` | Active file, always included |
+| `●` | Selected context file |
+
+Selected context files persist for the current Neovim session.
+
+## Configuration
 
 ```lua
 require("tau").setup({
   api_url = "https://api.openai.com/v1",
-  api_key = os.getenv("OPENAI_API_KEY"),
+  api_key = vim.env.OPENAI_API_KEY,
   model = "gpt-4o",
+
+  -- optional
+  context_lines = 30,
+  timeout_ms = 60000,
+  context_window = 128000,
+  temperature = 0.2,
+  max_tokens = 4096,
+  top_p = 1,
+  debug = false,
+  keys = { context = "<C-t>" },
 })
 ```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `api_url` | required | OpenAI-compatible API base URL |
+| `api_key` | required | API key; prefer environment variables |
+| `model` | `gpt-4o` | Model name |
+| `context_lines` | `30` | Lines above and below the selection to include |
+| `timeout_ms` | `60000` | Request timeout in milliseconds |
+| `context_window` | unset | Model context window, used for token estimates |
+| `temperature` | unset | Sampling temperature, `0` to `2` |
+| `max_tokens` | unset | Maximum response tokens |
+| `top_p` | unset | Nucleus sampling value, `0` to `1` |
+| `debug` | `false` | Write diagnostics to `~/.local/state/tau/diag.log` |
+| `keys.context` | `<C-t>` | Open context picker from the instruction picker |
+
+Commands: `:Tau [instruction]`, `:TauCancel`, `:TauContext`.
 
 ## License
 
