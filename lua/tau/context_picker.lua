@@ -7,6 +7,8 @@ local M = {}
 
 local _open = false
 
+vim.api.nvim_set_hl(0, "TauContextCursorLine", { link = "CursorLine" })
+
 --- Collect candidate file paths (absolute), deduplicated and sorted.
 --- @return string[]
 local function get_candidates()
@@ -44,10 +46,13 @@ end
 
 --- Format a single candidate line for display.
 --- @param abs_path string
+--- @param current_file string|nil  always-included locked file
 --- @return string
-local function format_line(abs_path)
+local function format_line(abs_path, current_file)
   local rel = vim.fn.fnamemodify(abs_path, ":~:.")
-  if context_files.contains(abs_path) then
+  if abs_path == current_file then
+    return "  ◎ " .. rel
+  elseif context_files.contains(abs_path) then
     return "  ● " .. rel
   else
     return "    " .. rel
@@ -56,9 +61,13 @@ end
 
 --- Build the footer with selected count (left) and hints (right), padded with ─.
 --- @param width integer  inner window width
+--- @param current_file string|nil  excluded from the selected count (always sent as --file)
 --- @return string
-local function build_footer(width)
-  local count = #context_files.get()
+local function build_footer(width, current_file)
+  local count = 0
+  for _, p in ipairs(context_files.get()) do
+    if p ~= current_file then count = count + 1 end
+  end
   local left = count > 0 and (" " .. count .. " selected ") or ""
   local right = " <CR> toggle · <Esc> close "
   local pad = width - vim.fn.strdisplaywidth(left) - vim.fn.strdisplaywidth(right)
@@ -67,17 +76,26 @@ local function build_footer(width)
 end
 
 --- Open the context file picker.
---- @param opts? { on_close?: fun() }
+--- @param opts? { on_close?: fun(), current_file?: string }
 function M.open(opts)
-  if _open then return end
-  _open = true
-
   opts = opts or {}
 
-  local candidates = get_candidates()
-  if #candidates == 0 then
+  if _open then
+    if opts.on_close then opts.on_close() end
+    return
+  end
+  _open = true
+
+  local current_file = opts.current_file
+
+  local ok, candidates = pcall(get_candidates)
+  if not ok or #candidates == 0 then
     _open = false
-    vim.api.nvim_echo({ { "tau: no candidate files found", "WarningMsg" } }, false, {})
+    if not ok then
+      vim.api.nvim_echo({ { "tau: failed to list files", "WarningMsg" } }, false, {})
+    else
+      vim.api.nvim_echo({ { "tau: no candidate files found", "WarningMsg" } }, false, {})
+    end
     if opts.on_close then opts.on_close() end
     return
   end
@@ -93,9 +111,6 @@ function M.open(opts)
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].buftype = "nofile"
 
-  -- Cursor line highlight
-  vim.api.nvim_set_hl(0, "TauContextCursorLine", { link = "CursorLine" })
-
   -- Window
   local win = vim.api.nvim_open_win(buf, true, {
     relative  = "editor",
@@ -106,7 +121,7 @@ function M.open(opts)
     border    = "rounded",
     title     = " Context Files ",
     title_pos = "left",
-    footer     = build_footer(width),
+    footer     = build_footer(width, current_file),
     footer_pos = "left",
     style     = "minimal",
     noautocmd = true,
@@ -114,11 +129,13 @@ function M.open(opts)
   vim.wo[win].cursorline = true
   vim.wo[win].winhighlight = "CursorLine:TauContextCursorLine"
 
+  vim.cmd("stopinsert")
+
   -- Render candidate lines
   local function render()
     local lines = {}
     for _, abs in ipairs(candidates) do
-      lines[#lines + 1] = format_line(abs)
+      lines[#lines + 1] = format_line(abs, current_file)
     end
     vim.bo[buf].modifiable = true
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
@@ -126,7 +143,7 @@ function M.open(opts)
 
     -- Update footer with current selected count
     if vim.api.nvim_win_is_valid(win) then
-      vim.api.nvim_win_set_config(win, { footer = build_footer(width), footer_pos = "left" })
+      vim.api.nvim_win_set_config(win, { footer = build_footer(width, current_file), footer_pos = "left" })
     end
   end
 
@@ -151,7 +168,7 @@ function M.open(opts)
   local function toggle()
     local row = vim.api.nvim_win_get_cursor(win)[1]
     local abs = candidates[row]
-    if not abs then return end
+    if not abs or abs == current_file then return end
     context_files.toggle(abs)
     render()
     -- Restore cursor position

@@ -9,9 +9,10 @@ local _aug_id = 0
 
 --- @param history string[]  ordered newest-first
 --- @param on_choice fun(choice: string|nil)
---- @param opts? { context_key?: string }
+--- @param opts? { context_key?: string, current_file?: string }
 function M.open(history, on_choice, opts)
-  local context_key = opts and opts.context_key or "<leader>tc"
+  local context_key  = opts and opts.context_key or "<C-t>"
+  local current_file = opts and opts.current_file or nil
   local closed = false
   local cycling = false
   local context_open = false
@@ -119,8 +120,10 @@ function M.open(history, on_choice, opts)
   vim.keymap.set("n", "j",     hist_next, mo)
 
   local function open_context()
+    if context_open then return end
     context_open = true
     require("tau.context_picker").open({
+      current_file = current_file,
       on_close = function()
         context_open = false
         if not closed and vim.api.nvim_win_is_valid(win) then
