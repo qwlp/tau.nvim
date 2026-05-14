@@ -26,6 +26,8 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
   end,
   keys = {
     { "<leader>t", ":Tau<CR>", mode = "v", desc = "Tau: edit selection" },
+    { "<leader>ta", ":TauAsk<CR>", mode = "n", desc = "Tau: ask about file" },
+    { "<leader>tv", ":TauVibe<CR>", mode = "n", desc = "Tau: vibe with opencode" },
     { "<C-t>", ":TauContext<CR>", mode = "n", desc = "Tau: context files" },
   },
 }
@@ -35,7 +37,8 @@ Using `vim.pack`:
 
 `tau.nvim` requires [Bun](https://bun.sh) to build the CLI binary at `cli/tau`.
 The plugin is not usable until that build has completed, because `:Tau`,
-`:TauContext`, and `:TauCancel` all rely on the compiled CLI being present.
+`:TauAsk`, `:TauContext`, and `:TauCancel` all rely on the compiled CLI being
+present.
 
 Minimal install:
 
@@ -92,6 +95,8 @@ require("tau").setup({
 })
 
 vim.keymap.set("v", "<leader>t", ":Tau<CR>", { desc = "Tau: edit selection" })
+vim.keymap.set("n", "<leader>ta", ":TauAsk<CR>", { desc = "Tau: ask about file" })
+vim.keymap.set("n", "<leader>tv", ":TauVibe<CR>", { desc = "Tau: vibe with opencode" })
 vim.keymap.set("n", "<C-t>", ":TauContext<CR>", { desc = "Tau: context files" })
 vim.keymap.set("n", "<leader>T", ":TauCancel<CR>", { desc = "Tau: cancel request" })
 ```
@@ -111,11 +116,33 @@ For Ollama-compatible local servers:
 
 ```lua
 require("tau").setup({
+  connector = "api",
   api_url = "http://localhost:11434/v1",
   api_key = "ollama",
   model = "qwen2.5-coder:7b",
 })
 ```
+
+To use [opencode](https://opencode.ai/) instead of the OpenAI-compatible API
+connector:
+
+```lua
+require("tau").setup({
+  connector = "opencode",
+
+  -- optional
+  opencode_model = "anthropic/claude-sonnet-4-5",
+  opencode_agent = "build",
+  opencode_args = {},
+})
+```
+
+Tau runs `opencode run` with the active file and selected context files attached
+via `--file` and parses `--format json` output so only the final assistant text
+is shown in Tau. The opencode prompt uses internal `TAU_FINAL_BEGIN` /
+`TAU_FINAL_END` markers to discard thinking text before rendering. Ask mode can
+use opencode's project context and tools, while edit mode still asks opencode to
+return replacement text for Tau's review UI.
 
 ## Usage
 
@@ -135,6 +162,22 @@ Or run `:Tau` without an instruction to open the instruction picker. While revie
 
 Tau automatically includes nearby lines from the active file. To add more files as context, press `<C-t>` in the instruction picker or run `:TauContext`.
 
+To ask a question without editing the buffer, run:
+
+```vim
+:TauAsk what does this file do?
+```
+
+Ask mode sends the active buffer as context, includes any selected context files, and opens the answer in a scratch split.
+
+To run opencode in the background and get notified when it finishes, run:
+
+```vim
+:TauVibe update the tests for this change
+```
+
+Vibe mode always uses opencode, sends the active buffer and selected context files, and reports completion with a small bottom-right toast that wraps, auto-closes, and does not take focus.
+
 In the context picker:
 
 | Key / Symbol | Meaning |
@@ -150,6 +193,7 @@ Selected context files persist for the current Neovim session.
 
 ```lua
 require("tau").setup({
+  connector = "api",
   api_url = "https://api.openai.com/v1",
   api_key = vim.env.OPENAI_API_KEY,
   model = "gpt-4o",
@@ -161,6 +205,11 @@ require("tau").setup({
   temperature = 0.2,
   max_tokens = 4096,
   top_p = 1,
+  opencode_command = "opencode",
+  opencode_model = "anthropic/claude-sonnet-4-5",
+  opencode_agent = "build",
+  opencode_dir = vim.fn.getcwd(),
+  opencode_args = {},
   debug = false,
   keys = { context = "<C-t>" },
 })
@@ -168,8 +217,9 @@ require("tau").setup({
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `api_url` | required | OpenAI-compatible API base URL |
-| `api_key` | required | API key; prefer environment variables |
+| `connector` | `"api"` | Connector to use: `"api"` or `"opencode"` |
+| `api_url` | required for `api` | OpenAI-compatible API base URL |
+| `api_key` | required for `api` | API key; prefer environment variables |
 | `model` | `gpt-4o` | Model name |
 | `context_lines` | `30` | Lines above and below the selection to include |
 | `timeout_ms` | `60000` | Request timeout in milliseconds |
@@ -177,10 +227,15 @@ require("tau").setup({
 | `temperature` | unset | Sampling temperature, `0` to `2` |
 | `max_tokens` | unset | Maximum response tokens |
 | `top_p` | unset | Nucleus sampling value, `0` to `1` |
+| `opencode_command` | `"opencode"` | opencode executable to run when `connector = "opencode"` |
+| `opencode_model` | unset | opencode model in `provider/model` format |
+| `opencode_agent` | unset | opencode agent to use |
+| `opencode_dir` | current working directory at setup | Directory passed to `opencode run --dir` |
+| `opencode_args` | `{}` | Extra arguments passed to `opencode run`; Tau controls `--format` and suppresses `--thinking` |
 | `debug` | `false` | Write diagnostics to `~/.local/state/tau/diag.log` |
 | `keys.context` | `<C-t>` | Open context picker from the instruction picker |
 
-Commands: `:Tau [instruction]`, `:TauCancel`, `:TauContext`.
+Commands: `:Tau [instruction]`, `:TauAsk [question]`, `:TauVibe [prompt]`, `:TauCancel`, `:TauContext`.
 
 ## License
 

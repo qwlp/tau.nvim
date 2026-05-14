@@ -45,4 +45,40 @@ describe("buildSystemPrompt", () => {
     const result = buildSystemPrompt({ hasContextFiles: false })
     expect(result).not.toContain("[Context files]")
   })
+
+  test("uses ask-mode phrasing", () => {
+    const result = buildSystemPrompt({ mode: "ask", filename: "main.ts", filetype: "typescript" })
+    expect(result).toContain("Answer the user's question")
+    expect(result).toContain("active file")
+    expect(result).toContain("File: main.ts (typescript)")
+    expect(result).not.toContain("Return ONLY the replacement code")
+  })
+
+  test("includes ask-mode context files rule when requested", () => {
+    const result = buildSystemPrompt({ mode: "ask", hasContextFiles: true })
+    expect(result).toContain("[Context files]")
+    expect(result).toContain("question")
+  })
+
+  test("adds final markers for opencode ask mode", () => {
+    const result = buildSystemPrompt({ mode: "ask", connector: "opencode" })
+    expect(result).toContain("TAU_FINAL_BEGIN")
+    expect(result).toContain("TAU_FINAL_END")
+    expect(result).toContain("hidden reasoning")
+  })
+
+  test("adds final markers for opencode edit mode", () => {
+    const result = buildSystemPrompt({ connector: "opencode" })
+    expect(result).toContain("TAU_FINAL_BEGIN")
+    expect(result).toContain("TAU_FINAL_END")
+    expect(result).toContain("final replacement text")
+  })
+
+  test("uses autonomous opencode phrasing for vibe mode", () => {
+    const result = buildSystemPrompt({ mode: "vibe", connector: "opencode", hasContextFiles: true })
+    expect(result).toContain("autonomous opencode coding agent")
+    expect(result).toContain("TAU_FINAL_BEGIN")
+    expect(result).toContain("TAU_FINAL_END")
+    expect(result).toContain("[Context files]")
+  })
 })

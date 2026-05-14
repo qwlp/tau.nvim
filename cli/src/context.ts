@@ -7,6 +7,7 @@ export interface UserMessageOpts {
   contextAbove?: string
   contextBelow?: string
   contextFiles?: string[]
+  mode?: "edit" | "ask" | "vibe"
 }
 
 export function buildUserMessage(opts: UserMessageOpts): string {
@@ -23,6 +24,13 @@ export function buildUserMessage(opts: UserMessageOpts): string {
       }
     }
     parts.push("[Context files]\n" + fileBlocks.join("\n\n"))
+  }
+
+  if (opts.mode === "ask" || opts.mode === "vibe") {
+    const header = opts.filename ? `--- ${opts.filename} ---\n[Active file]` : "[Active file]"
+    parts.push(`${header}\n${opts.selection}`)
+    parts.push(`${opts.mode === "vibe" ? "[Prompt]" : "[Question]"}\n${opts.instruction}`)
+    return parts.join("\n\n")
   }
 
   if (opts.contextAbove) {

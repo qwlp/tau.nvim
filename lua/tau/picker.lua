@@ -1,7 +1,7 @@
--- Native instruction picker — compact single-box layout.
+-- Native instruction picker.
 -- NOTE: When the Telescope UI provider (#45) is implemented, it must replicate
--- this layout spec: title top-left, single-line input, inline history cycling,
--- and keybinding hints in the bottom-right border.
+-- this layout spec: title top-left, multiline wrapping input, inline history
+-- cycling, and keybinding hints in the bottom-right border.
 
 local context_files = require("tau.context_files")
 
@@ -11,10 +11,11 @@ local _aug_id = 0
 
 --- @param history string[]  ordered newest-first
 --- @param on_choice fun(choice: string|nil)
---- @param opts? { context_key?: string, current_file?: string }
+--- @param opts? { context_key?: string, current_file?: string, title?: string }
 function M.open(history, on_choice, opts)
   local context_key  = opts and opts.context_key or "<C-t>"
   local current_file = opts and opts.current_file
+  local title = opts and opts.title or " Instruction "
   local closed = false
   local cycling = false
   local context_open = false
@@ -23,8 +24,8 @@ function M.open(history, on_choice, opts)
   local aug_name = "tau_picker_" .. _aug_id
 
   -- Geometry
-  local width     = math.max(40, math.min(70, vim.o.columns - 6))
-  local height    = 1
+  local width     = math.max(56, math.min(96, vim.o.columns - 8))
+  local height    = math.max(4, math.min(7, vim.o.lines - 8))
   local start_row = math.floor((vim.o.lines - height - 2) / 2)
   local start_col = math.floor((vim.o.columns - width - 2) / 2)
 
@@ -34,7 +35,7 @@ function M.open(history, on_choice, opts)
   vim.bo[buf].buftype   = "nofile"
 
   -- Window
-  local footer = " ⇅ reuse "
+  local footer = " <CR> send · <C-CR> newline · ⇅ reuse "
   local win = vim.api.nvim_open_win(buf, true, {
     relative  = "editor",
     row       = start_row,
@@ -42,13 +43,16 @@ function M.open(history, on_choice, opts)
     width     = width,
     height    = height,
     border    = "rounded",
-    title     = " Instruction ",
+    title     = title,
     title_pos = "left",
     footer     = footer,
     footer_pos = "right",
     style     = "minimal",
     noautocmd = true,
   })
+  vim.wo[win].wrap = true
+  vim.wo[win].linebreak = true
+  vim.wo[win].sidescrolloff = 0
 
   -- "In Context" display window (appears below when files are selected)
   local ctx_win = nil
@@ -99,7 +103,7 @@ function M.open(history, on_choice, opts)
       return
     end
 
-    local ctx_height = #lines
+    local ctx_height = math.min(#lines, math.max(1, vim.o.lines - (start_row + height + 5)))
 
     if not ctx_win or not vim.api.nvim_win_is_valid(ctx_win) then
       ctx_buf = vim.api.nvim_create_buf(false, true)
@@ -145,13 +149,15 @@ function M.open(history, on_choice, opts)
   local saved_input = ""
 
   local function get_input()
-    return vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] or ""
+    return table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
   end
 
   local function set_input(text)
     cycling = true
-    vim.api.nvim_buf_set_lines(buf, 0, 1, false, { text })
-    vim.api.nvim_win_set_cursor(win, { 1, #text })
+    local lines = vim.split(text, "\n", { plain = true })
+    if #lines == 0 then lines = { "" } end
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    vim.api.nvim_win_set_cursor(win, { #lines, #lines[#lines] })
     cycling = false
   end
 
@@ -196,21 +202,30 @@ function M.open(history, on_choice, opts)
   end
 
   local function confirm()
-    local text = get_input()
+    local text = vim.trim(get_input())
     if not text or text == "" then return end
     close()
     vim.schedule(function() on_choice(text) end)
+  end
+
+  local function insert_newline()
+    local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+    vim.api.nvim_feedkeys(keys, "n", false)
   end
 
   -- Keymaps
   local mo = { buffer = buf, noremap = true, silent = true }
 
   vim.keymap.set("i", "<CR>",   confirm,   mo)
+  vim.keymap.set("i", "<C-CR>", insert_newline, mo)
+  vim.keymap.set("i", "<C-j>",  insert_newline, mo)
   vim.keymap.set("i", "<Esc>",  cancel,    mo)
   vim.keymap.set("i", "<Up>",   hist_prev, mo)
   vim.keymap.set("i", "<Down>", hist_next, mo)
 
   vim.keymap.set("n", "<CR>",  confirm,   mo)
+  vim.keymap.set("n", "<C-CR>", "i<CR><Esc>", mo)
+  vim.keymap.set("n", "<C-j>",  "i<CR><Esc>", mo)
   vim.keymap.set("n", "<Esc>", cancel,    mo)
   vim.keymap.set("n", "q",     cancel,    mo)
   vim.keymap.set("n", "k",     hist_prev, mo)
@@ -237,19 +252,11 @@ function M.open(history, on_choice, opts)
   -- Autocmds
   local aug = vim.api.nvim_create_augroup(aug_name, { clear = true })
 
-  -- Collapse to single line if user inserts a newline, and reset history index on manual edits
+  -- Reset history index on manual edits.
   vim.api.nvim_create_autocmd({ "TextChangedI", "TextChanged" }, {
     buffer   = buf,
     group    = aug,
     callback = function()
-      local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-      if #lines > 1 then
-        local input = table.concat(lines, "")
-        cycling = true
-        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { input })
-        vim.api.nvim_win_set_cursor(win, { 1, #input })
-        cycling = false
-      end
       if not cycling then
         hist_index = 0
       end

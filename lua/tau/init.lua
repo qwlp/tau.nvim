@@ -12,7 +12,7 @@ local config = {}
 local SIGTERM  = 15
 local NS_TRACK = vim.api.nvim_create_namespace("tau_track")
 
---- @type { handle: vim.SystemObj|nil, bufnr: integer, cancelled: boolean, prev_esc: table, mark_start: integer, mark_end: integer } | nil
+--- @type { handle: vim.SystemObj|nil, bufnr: integer, cancelled: boolean, prev_esc: table, mark_start: integer|nil, mark_end: integer|nil } | nil
 local _job = nil
 
 --- @type { bufnr: integer, start_line: integer, end_line: integer, new_lines: string[], instruction: string } | nil
@@ -23,6 +23,141 @@ local _watching = false
 
 --- True while the instruction picker is open, to prevent stacked invocations.
 local _picking = false
+local _toast_timer = nil
+local _toast_win = nil
+
+local function ensure_ready()
+  if not config.connector then
+    vim.api.nvim_echo({ { "tau: call require('tau').setup() first", "ErrorMsg" } }, false, {})
+    return false
+  end
+
+  if _job or _picking then
+    vim.api.nvim_echo({ { "tau: request already in flight — use :TauCancel first", "WarningMsg" } }, false, {})
+    return false
+  end
+
+  return true
+end
+
+local function current_file(bufnr)
+  local raw_name = vim.api.nvim_buf_get_name(bufnr)
+  return raw_name ~= "" and vim.fn.fnamemodify(raw_name, ":p") or nil
+end
+
+local function with_instruction(bufnr, args, title, callback)
+  local instruction = args and args ~= "" and args or nil
+  if instruction then
+    callback(instruction)
+    return
+  end
+
+  _picking = true
+  picker.open(history.list(), function(choice)
+    _picking = false
+    if not choice then return end
+    callback(choice)
+  end, { context_key = config.keys.context, current_file = current_file(bufnr), title = title })
+end
+
+local function close_toast()
+  if _toast_timer then
+    _toast_timer:stop()
+    _toast_timer:close()
+    _toast_timer = nil
+  end
+  if _toast_win and vim.api.nvim_win_is_valid(_toast_win) then
+    pcall(vim.api.nvim_win_close, _toast_win, true)
+  end
+  _toast_win = nil
+end
+
+local function wrap_text(text, width)
+  local wrapped = {}
+  for raw_line in text:gmatch("([^\n]*)\n?") do
+    if raw_line == "" then
+      wrapped[#wrapped + 1] = ""
+    else
+      local line = raw_line
+      while vim.fn.strdisplaywidth(line) > width do
+        local cut = width
+        while cut > 1 and line:sub(cut, cut) ~= " " do
+          cut = cut - 1
+        end
+        if cut <= 1 then cut = width end
+        wrapped[#wrapped + 1] = vim.trim(line:sub(1, cut))
+        line = vim.trim(line:sub(cut + 1))
+      end
+      wrapped[#wrapped + 1] = line
+    end
+    if raw_line == "" and text:sub(-1) ~= "\n" then break end
+  end
+  if #wrapped == 0 then wrapped = { text } end
+  return wrapped
+end
+
+local function toast(msg, level)
+  close_toast()
+
+  local width = math.max(28, math.min(64, math.floor(vim.o.columns * 0.36)))
+  local lines = wrap_text(msg, width)
+  local max_lines = math.max(2, math.min(8, vim.o.lines - 4))
+  if #lines > max_lines then
+    local clipped = {}
+    for i = 1, max_lines do
+      clipped[i] = lines[i]
+    end
+    clipped[max_lines] = vim.trim(clipped[max_lines]):gsub("%s*$", "") .. "..."
+    lines = clipped
+  end
+
+  local max_width = 0
+  for _, line in ipairs(lines) do
+    max_width = math.max(max_width, vim.fn.strdisplaywidth(line))
+  end
+
+  width = math.min(math.max(max_width, 24), math.max(24, vim.o.columns - 6))
+  local height = #lines
+  local row = math.max(1, vim.o.lines - height - 4)
+  local col = math.max(0, vim.o.columns - width - 3)
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].buftype = "nofile"
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+
+  local title = level >= vim.log.levels.ERROR and " tau error " or " tau "
+  local ok, win = pcall(vim.api.nvim_open_win, buf, false, {
+    relative = "editor",
+    row = row,
+    col = col,
+    width = width,
+    height = height,
+    border = "rounded",
+    title = title,
+    title_pos = "left",
+    style = "minimal",
+    focusable = false,
+    noautocmd = true,
+    zindex = 250,
+  })
+
+  if not ok then
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    vim.api.nvim_echo({ { msg, level >= vim.log.levels.ERROR and "ErrorMsg" or "Comment" } }, false, {})
+    return
+  end
+
+  _toast_win = win
+  _toast_timer = vim.uv.new_timer()
+  _toast_timer:start(5000, 0, vim.schedule_wrap(close_toast))
+end
+
+local function status(msg, level)
+  level = level or vim.log.levels.INFO
+  toast(msg, level)
+end
 
 --- Clear preview UI unconditionally — safe to call even if _job is nil.
 local function _clear_pending()
@@ -105,11 +240,12 @@ local function _regen()
 end
 
 --- Configure the plugin. Must be called before using :Tau.
---- @param opts table { api_url: string, api_key: string, model?: string, debug?: boolean, timeout_ms?: number, context_window?: number, context_lines?: number, temperature?: number, max_tokens?: number, top_p?: number, keys?: { context?: string } }
+--- @param opts table { connector?: "api"|"opencode", api_url?: string, api_key?: string, model?: string, debug?: boolean, timeout_ms?: number, context_window?: number, context_lines?: number, temperature?: number, max_tokens?: number, top_p?: number, opencode_command?: string, opencode_model?: string, opencode_agent?: string, opencode_dir?: string, opencode_args?: string[], keys?: { context?: string } }
 function M.setup(opts)
   vim.validate({
-    api_url    = { opts.api_url, "string" },
-    api_key    = { opts.api_key, "string" },
+    connector  = { opts.connector, "string", true },
+    api_url    = { opts.api_url, "string", true },
+    api_key    = { opts.api_key, "string", true },
     model      = { opts.model, "string", true },
     debug      = { opts.debug, "boolean", true },
     timeout_ms      = { opts.timeout_ms, "number", true },
@@ -118,8 +254,25 @@ function M.setup(opts)
     temperature     = { opts.temperature, "number", true },
     max_tokens      = { opts.max_tokens, "number", true },
     top_p           = { opts.top_p, "number", true },
+    opencode_command = { opts.opencode_command, "string", true },
+    opencode_model   = { opts.opencode_model, "string", true },
+    opencode_agent   = { opts.opencode_agent, "string", true },
+    opencode_dir     = { opts.opencode_dir, "string", true },
+    opencode_args    = { opts.opencode_args, "table", true },
     keys            = { opts.keys, "table", true },
   })
+  opts.connector = opts.connector or "api"
+  if opts.connector ~= "api" and opts.connector ~= "opencode" then
+    error("tau: connector must be 'api' or 'opencode', got " .. opts.connector)
+  end
+  if opts.connector == "api" then
+    if not opts.api_url or opts.api_url == "" then
+      error("tau: api_url is required when connector = 'api'")
+    end
+    if not opts.api_key or opts.api_key == "" then
+      error("tau: api_key is required when connector = 'api'")
+    end
+  end
   if opts.context_lines ~= nil then
     if opts.context_lines < 1 or opts.context_lines ~= math.floor(opts.context_lines) then
       error("tau: context_lines must be a positive integer, got " .. opts.context_lines)
@@ -136,7 +289,15 @@ function M.setup(opts)
   if opts.top_p ~= nil and (opts.top_p < 0 or opts.top_p > 1) then
     error("tau: top_p must be between 0 and 1, got " .. opts.top_p)
   end
+  if opts.opencode_args ~= nil then
+    for i, arg in ipairs(opts.opencode_args) do
+      if type(arg) ~= "string" then
+        error("tau: opencode_args[" .. i .. "] must be a string")
+      end
+    end
+  end
   opts.context_lines = opts.context_lines or 30
+  opts.opencode_dir = opts.opencode_dir or vim.fn.getcwd()
   opts.keys = vim.tbl_extend("keep", opts.keys or {}, { context = "<C-t>" })
   config = opts
 end
@@ -144,15 +305,7 @@ end
 --- Main entry point. Called from the :Tau command.
 --- @param opts table vim command opts (line1, line2, args)
 function M.run(opts)
-  if not config.api_url then
-    vim.api.nvim_echo({ { "tau: call require('tau').setup() first", "ErrorMsg" } }, false, {})
-    return
-  end
-
-  if _job or _picking then
-    vim.api.nvim_echo({ { "tau: request already in flight — use :TauCancel first", "WarningMsg" } }, false, {})
-    return
-  end
+  if not ensure_ready() then return end
 
   local bufnr = vim.api.nvim_get_current_buf()
 
@@ -167,22 +320,176 @@ function M.run(opts)
     return
   end
 
-  -- Get instruction: from command args or history picker
-  local instruction = opts.args and opts.args ~= "" and opts.args or nil
-  local hist = history.list()
-
-  if instruction then
+  with_instruction(bufnr, opts.args, " Edit ", function(instruction)
     M._execute(bufnr, start_line, end_line, instruction)
-  else
-    _picking = true
-    local _raw_name = vim.api.nvim_buf_get_name(bufnr)
-    local current_file = _raw_name ~= "" and vim.fn.fnamemodify(_raw_name, ":p") or nil
-    picker.open(hist, function(choice)
-      _picking = false
-      if not choice then return end
-      M._execute(bufnr, start_line, end_line, choice)
-    end, { context_key = config.keys.context, current_file = current_file })
-  end
+  end)
+end
+
+--- Ask a question about the active buffer or provided range without applying edits.
+--- @param opts table vim command opts (line1?, line2?, range?, args)
+function M.ask(opts)
+  if not ensure_ready() then return end
+
+  local bufnr = vim.api.nvim_get_current_buf()
+  local has_range = opts.range and opts.range > 0
+  local start_line = has_range and opts.line1 or vim.fn.line(".")
+  local end_line = has_range and opts.line2 or vim.api.nvim_buf_line_count(bufnr)
+  local lines = has_range
+    and vim.api.nvim_buf_get_lines(bufnr, start_line - 1, end_line, false)
+    or vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local filepath = vim.api.nvim_buf_get_name(bufnr)
+  local filetype = vim.bo[bufnr].filetype
+
+  with_instruction(bufnr, opts.args, " Ask ", function(question)
+    question = vim.trim(question or "")
+    if question == "" then return end
+
+    ui.start(bufnr, start_line)
+
+    local accumulated = ""
+    local token_meta = nil
+    local prev_esc = vim.fn.maparg("<Esc>", "n", false, true)
+    _job = { handle = nil, bufnr = bufnr, cancelled = false, prev_esc = prev_esc,
+             mark_start = nil, mark_end = nil }
+
+    local handle = runner.run({
+      config = config,
+      mode = "ask",
+      instruction = question,
+      selection_text = table.concat(lines, "\n"),
+      filepath = filepath,
+      filetype = filetype,
+      context_files = require("tau.context_files").get(),
+
+      on_meta = function(meta)
+        token_meta = meta
+        ui.update_meta(meta)
+        if meta.warning then
+          vim.api.nvim_echo({ { "tau: " .. meta.warning, "WarningMsg" } }, false, {})
+        end
+      end,
+
+      on_token = function(chunk)
+        accumulated = accumulated .. chunk
+        vim.schedule(function()
+          ui.update_progress(#accumulated)
+        end)
+      end,
+
+      on_done = function()
+        if not _job then return end
+        if _job.cancelled then
+          _cleanup(bufnr)
+          return
+        end
+        history.add(question)
+        _cleanup(bufnr)
+        ui.show_answer(question, accumulated, token_meta)
+      end,
+
+      on_error = function(msg)
+        if not _job then return end
+        local was_cancelled = _job.cancelled
+        _cleanup(bufnr)
+        if was_cancelled then return end
+        local ok, err = pcall(function()
+          ui.error(bufnr, start_line, msg)
+        end)
+        if not ok then
+          vim.api.nvim_echo({ { "tau: " .. tostring(err), "ErrorMsg" } }, false, {})
+        end
+      end,
+    })
+
+    _job.handle = handle
+
+    vim.keymap.set("n", "<Esc>", function()
+      require("tau").cancel()
+    end, { buffer = bufnr, noremap = true, silent = true, desc = "tau: cancel request" })
+  end)
+end
+
+--- Run an opencode prompt in the background and notify on completion.
+--- @param opts table vim command opts (line1?, line2?, range?, args)
+function M.vibe(opts)
+  if not ensure_ready() then return end
+
+  local bufnr = vim.api.nvim_get_current_buf()
+  local has_range = opts.range and opts.range > 0
+  local start_line = has_range and opts.line1 or 1
+  local end_line = has_range and opts.line2 or vim.api.nvim_buf_line_count(bufnr)
+
+  with_instruction(bufnr, opts.args, " Vibe ", function(prompt)
+    prompt = vim.trim(prompt or "")
+    if prompt == "" then return end
+
+    local filepath = vim.api.nvim_buf_get_name(bufnr)
+    local filetype = vim.bo[bufnr].filetype
+    local lines = vim.api.nvim_buf_get_lines(bufnr, start_line - 1, end_line, false)
+    local start_ms = vim.uv.now()
+    local accumulated = ""
+    local prev_esc = vim.fn.maparg("<Esc>", "n", false, true)
+    local vibe_config = vim.tbl_extend("force", config, { connector = "opencode" })
+
+    _job = { handle = nil, bufnr = bufnr, cancelled = false, prev_esc = prev_esc,
+             mark_start = nil, mark_end = nil }
+
+    status("tau: vibe started", vim.log.levels.INFO)
+
+    local handle = runner.run({
+      config = vibe_config,
+      mode = "vibe",
+      instruction = prompt,
+      selection_text = table.concat(lines, "\n"),
+      filepath = filepath,
+      filetype = filetype,
+      context_files = require("tau.context_files").get(),
+
+      on_meta = function(meta)
+        if meta.warning then
+          vim.api.nvim_echo({ { "tau: " .. meta.warning, "WarningMsg" } }, false, {})
+        end
+      end,
+
+      on_token = function(chunk)
+        accumulated = accumulated .. chunk
+      end,
+
+      on_done = function()
+        if not _job then return end
+        if _job.cancelled then
+          _cleanup(bufnr)
+          return
+        end
+        history.add(prompt)
+        _cleanup(bufnr)
+        local elapsed = math.floor((vim.uv.now() - start_ms) / 1000)
+        local detail = vim.trim(accumulated):gsub("\n+", " ")
+        if #detail > 120 then
+          detail = detail:sub(1, 117) .. "..."
+        end
+        local msg = ("tau: vibe done in %ds"):format(elapsed)
+        if detail ~= "" then
+          msg = msg .. " - " .. detail
+        end
+        status(msg, vim.log.levels.INFO)
+      end,
+
+      on_error = function(msg)
+        if not _job then return end
+        local was_cancelled = _job.cancelled
+        _cleanup(bufnr)
+        if was_cancelled then return end
+        status("tau: vibe failed - " .. msg:gsub("\n+", " "), vim.log.levels.ERROR)
+      end,
+    })
+
+    _job.handle = handle
+
+    vim.keymap.set("n", "<Esc>", function()
+      require("tau").cancel()
+    end, { buffer = bufnr, noremap = true, silent = true, desc = "tau: cancel request" })
+  end)
 end
 
 --- Internal: execute the LLM replacement after instruction is known.

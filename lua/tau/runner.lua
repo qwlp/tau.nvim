@@ -6,6 +6,7 @@ local bin = plugin_dir .. "/cli/tau"
 --- Spawn the tau CLI and stream its output.
 --- @param opts table
 ---   - instruction string
+---   - mode "edit"|"ask"|"vibe"?
 ---   - selection_text string
 ---   - context_above string
 ---   - context_below string
@@ -22,9 +23,15 @@ function M.run(opts)
 
   -- Copy current environment and overlay plugin config
   local env = vim.fn.environ()
+  if cfg.connector then env.TAU_CONNECTOR = cfg.connector end
   if cfg.api_url then env.TAU_API_URL = cfg.api_url end
   if cfg.api_key then env.TAU_API_KEY = cfg.api_key end
   if cfg.model then env.TAU_MODEL = cfg.model end
+  if cfg.opencode_command then env.TAU_OPENCODE_COMMAND = cfg.opencode_command end
+  if cfg.opencode_model then env.TAU_OPENCODE_MODEL = cfg.opencode_model end
+  if cfg.opencode_agent then env.TAU_OPENCODE_AGENT = cfg.opencode_agent end
+  if cfg.opencode_dir then env.TAU_OPENCODE_DIR = cfg.opencode_dir end
+  if cfg.opencode_args then env.TAU_OPENCODE_ARGS = table.concat(cfg.opencode_args, "\n") end
   if cfg.debug then env.TAU_DEBUG = "1" end
   if cfg.timeout_ms then env.TAU_TIMEOUT_MS = tostring(cfg.timeout_ms) end
   if cfg.context_window then env.TAU_CONTEXT_WINDOW = tostring(cfg.context_window) end
@@ -33,6 +40,9 @@ function M.run(opts)
   if cfg.top_p then env.TAU_TOP_P = tostring(cfg.top_p) end
 
   local cmd = { bin, opts.instruction }
+  if opts.mode then
+    vim.list_extend(cmd, { "--mode", opts.mode })
+  end
 
   if opts.context_above and opts.context_above ~= "" then
     vim.list_extend(cmd, { "--context-above", opts.context_above })

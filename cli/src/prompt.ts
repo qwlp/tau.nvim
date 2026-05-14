@@ -3,7 +3,12 @@ export interface PromptOpts {
   filetype?: string
   selectionEmpty?: boolean
   hasContextFiles?: boolean
+  mode?: "edit" | "ask" | "vibe"
+  connector?: "api" | "opencode"
 }
+
+export const TAU_FINAL_BEGIN = "TAU_FINAL_BEGIN"
+export const TAU_FINAL_END = "TAU_FINAL_END"
 
 export function buildSystemPrompt(opts: PromptOpts): string {
   const fileLine = opts.filename
@@ -11,6 +16,51 @@ export function buildSystemPrompt(opts: PromptOpts): string {
     : opts.filetype
     ? `Language: ${opts.filetype}`
     : ""
+
+  if (opts.mode === "vibe") {
+    const contextFilesRule = opts.hasContextFiles
+      ? "- Use [Context files] for broader project context when relevant"
+      : ""
+
+    return [
+      "You are an autonomous opencode coding agent running in the background from tau.nvim.",
+      `When finished, put a concise completion summary between ${TAU_FINAL_BEGIN} and ${TAU_FINAL_END}.`,
+      "CRITICAL RULES:",
+      "- Use available tools to inspect and modify the project as needed",
+      "- Follow the user's prompt directly",
+      "- Do not include hidden reasoning, thinking notes, tool logs, or progress updates in the final summary",
+      `- Output ${TAU_FINAL_BEGIN} on its own line before the summary and ${TAU_FINAL_END} on its own line after it`,
+      contextFilesRule,
+      fileLine,
+    ]
+      .filter(Boolean)
+      .join("\n")
+  }
+
+  if (opts.mode === "ask") {
+    const contextFilesRule = opts.hasContextFiles
+      ? "- Reference [Context files] for broader project context when relevant to the question"
+      : ""
+
+    return [
+      "You are a code assistant. Answer the user's question using the active file as context.",
+      opts.connector === "opencode"
+        ? `Use opencode's tools only when needed. Put the final answer between ${TAU_FINAL_BEGIN} and ${TAU_FINAL_END}.`
+        : "",
+      "CRITICAL RULES:",
+      "- Do not propose or apply an edit unless the user explicitly asks for one",
+      "- Be concise and specific",
+      "- Do not include hidden reasoning, thinking notes, tool logs, or progress updates",
+      opts.connector === "opencode"
+        ? `- Output ${TAU_FINAL_BEGIN} on its own line before the answer and ${TAU_FINAL_END} on its own line after it`
+        : "",
+      "- Cite relevant function, type, or file names when useful",
+      contextFilesRule,
+      fileLine,
+    ]
+      .filter(Boolean)
+      .join("\n")
+  }
 
   const intro = opts.selectionEmpty
     ? "You are a code editing assistant. The selected region is empty — generate new code to insert at that position."
@@ -31,12 +81,19 @@ export function buildSystemPrompt(opts: PromptOpts): string {
   return [
     intro,
     outputRule,
+    opts.connector === "opencode"
+      ? `Use opencode's tools only when needed. Put the final replacement text between ${TAU_FINAL_BEGIN} and ${TAU_FINAL_END}.`
+      : "",
     "CRITICAL RULES:",
     `- ${firstBullet}`,
     "- Do NOT repeat code from [Context above] or [Context below]",
     contextFilesRule,
     "- No markdown fences (no ```)",
     "- No explanation or commentary",
+    "- No hidden reasoning, thinking notes, tool logs, or progress updates",
+    opts.connector === "opencode"
+      ? `- Output ${TAU_FINAL_BEGIN} on its own line before the replacement and ${TAU_FINAL_END} on its own line after it`
+      : "",
     "- Match the exact indentation of the selected code — use the same leading whitespace on every line",
     fileLine,
   ]

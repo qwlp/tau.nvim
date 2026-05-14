@@ -197,4 +197,38 @@ function M.error(bufnr, start_line, msg)
   end, ERROR_CLEAR_TIMEOUT_MS)
 end
 
+--- Show an ask-mode answer in a scratch split.
+--- @param question string
+--- @param answer string
+--- @param meta? table token estimation metadata from CLI
+function M.show_answer(question, answer, meta)
+  vim.cmd("botright split")
+  local win = vim.api.nvim_get_current_win()
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_win_set_buf(win, bufnr)
+  vim.bo[bufnr].buftype = "nofile"
+  vim.bo[bufnr].bufhidden = "wipe"
+  vim.bo[bufnr].swapfile = false
+  vim.bo[bufnr].filetype = "markdown"
+
+  local title = "tau ask"
+  if meta and meta.fill_pct then
+    title = string.format("tau ask (%.0f%% ctx)", meta.fill_pct)
+  end
+
+  local lines = {
+    "# " .. title,
+    "",
+    "## Question",
+    "",
+    question,
+    "",
+    "## Answer",
+    "",
+  }
+  vim.list_extend(lines, vim.split(vim.trim(answer), "\n", { plain = true }))
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+  vim.bo[bufnr].modifiable = false
+end
+
 return M

@@ -179,4 +179,47 @@ describe("buildUserMessage", () => {
       expect(aboveIdx).toBeLessThan(selIdx)
     })
   })
+
+  describe("ask mode", () => {
+    test("uses active file and question sections", () => {
+      const result = buildUserMessage({
+        mode: "ask",
+        selection: "export const value = 1",
+        instruction: "What does this file do?",
+        filename: "/path/to/main.ts",
+      })
+      expect(result).toContain("--- /path/to/main.ts ---\n[Active file]")
+      expect(result).toContain("export const value = 1")
+      expect(result).toContain("[Question]\nWhat does this file do?")
+      expect(result).not.toContain("[Selected code]")
+      expect(result).not.toContain("[Instruction]")
+    })
+
+    test("keeps context files before active file", () => {
+      const result = buildUserMessage({
+        mode: "ask",
+        selection: "SEL",
+        instruction: "QUESTION",
+        contextFiles: ["/nonexistent/path/file.ts"],
+      })
+      expect(result.indexOf("[Context files]")).toBeLessThan(result.indexOf("[Active file]"))
+      expect(result.indexOf("[Active file]")).toBeLessThan(result.indexOf("[Question]"))
+    })
+  })
+
+  describe("vibe mode", () => {
+    test("uses active file and prompt sections", () => {
+      const result = buildUserMessage({
+        mode: "vibe",
+        selection: "export const value = 1",
+        instruction: "Refactor this module",
+        filename: "/path/to/main.ts",
+      })
+      expect(result).toContain("--- /path/to/main.ts ---\n[Active file]")
+      expect(result).toContain("export const value = 1")
+      expect(result).toContain("[Prompt]\nRefactor this module")
+      expect(result).not.toContain("[Question]")
+      expect(result).not.toContain("[Selected code]")
+    })
+  })
 })
